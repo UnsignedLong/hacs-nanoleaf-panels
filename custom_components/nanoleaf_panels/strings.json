@@ -1,0 +1,13 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Nanoleaf Panels",
+        "description": "Enable the Nanoleaf Panels service."
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "Only a single configuration of Nanoleaf Panels is allowed."
+    }
+  }
+}

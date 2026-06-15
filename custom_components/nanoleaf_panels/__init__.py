@@ -1,0 +1,522 @@
+"""Nanoleaf panel control service integration."""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+import colorsys
+from typing import Any, cast
+
+from aiohttp import ClientSession
+from aionanoleaf2 import Nanoleaf
+import voluptuous as vol
+
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import ATTR_ENTITY_ID, CONF_HOST, CONF_TOKEN
+from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import config_validation as cv, entity_registry as er
+from homeassistant.helpers.template import Template
+
+DOMAIN = "nanoleaf_panels"
+SERVICE_SET_PANELS = "set_panels"
+
+CONFIG_SCHEMA = cv.empty_config_schema(DOMAIN)
+DATA_YAML_CONFIGURED = "yaml_configured"
+
+ATTR_PANELS = "panels"
+ATTR_PANEL_ID = "panel_id"
+ATTR_NUMBER = "number"
+ATTR_HUE = "hue"
+ATTR_SATURATION = "saturation"
+ATTR_BRIGHTNESS = "brightness"
+ATTR_R = "r"
+ATTR_G = "g"
+ATTR_B = "b"
+ATTR_WHITE = "white"
+ATTR_TRANSITION_TIME = "transition_time"
+ATTR_FRAMES = "frames"
+ATTR_ANIMATION = "animation"
+ATTR_SPEED = "speed"
+ATTR_COLOR = "color"
+ATTR_CONDITION = "condition"
+ATTR_FALLBACK = "fallback"
+DEFAULT_TRANSITION_TIME = 20
+SPEED_SLOW = 30
+SPEED_MEDIUM = 15
+SPEED_FAST = 5
+
+_PANEL_TARGET_SCHEMA = {
+    vol.Exclusive(ATTR_PANEL_ID, "panel_target"): cv.positive_int,
+    vol.Exclusive(ATTR_NUMBER, "panel_target"): cv.positive_int,
+    vol.Optional(ATTR_WHITE, default=0): vol.All(vol.Coerce(int), vol.Range(min=0, max=255)),
+    vol.Optional(ATTR_TRANSITION_TIME): cv.positive_int,
+}
+
+_COLOR_SCHEMA = vol.Any(
+    vol.Schema(
+        {
+            vol.Required(ATTR_R): vol.All(vol.Coerce(int), vol.Range(min=0, max=255)),
+            vol.Required(ATTR_G): vol.All(vol.Coerce(int), vol.Range(min=0, max=255)),
+            vol.Required(ATTR_B): vol.All(vol.Coerce(int), vol.Range(min=0, max=255)),
+        }
+    ),
+    vol.Schema(
+        {
+            vol.Required(ATTR_HUE): vol.All(vol.Coerce(int), vol.Range(min=0, max=360)),
+            vol.Required(ATTR_SATURATION): vol.All(vol.Coerce(int), vol.Range(min=0, max=100)),
+            vol.Required(ATTR_BRIGHTNESS): vol.All(vol.Coerce(int), vol.Range(min=0, max=100)),
+        }
+    ),
+)
+
+_FRAME_SCHEMA = vol.Any(
+    vol.Schema(
+        {
+            vol.Required(ATTR_R): vol.All(vol.Coerce(int), vol.Range(min=0, max=255)),
+            vol.Required(ATTR_G): vol.All(vol.Coerce(int), vol.Range(min=0, max=255)),
+            vol.Required(ATTR_B): vol.All(vol.Coerce(int), vol.Range(min=0, max=255)),
+            vol.Optional(ATTR_WHITE, default=0): vol.All(vol.Coerce(int), vol.Range(min=0, max=255)),
+            vol.Optional(ATTR_TRANSITION_TIME, default=DEFAULT_TRANSITION_TIME): cv.positive_int,
+        }
+    ),
+    vol.Schema(
+        {
+            vol.Required(ATTR_HUE): vol.All(vol.Coerce(int), vol.Range(min=0, max=360)),
+            vol.Required(ATTR_SATURATION): vol.All(vol.Coerce(int), vol.Range(min=0, max=100)),
+            vol.Required(ATTR_BRIGHTNESS): vol.All(vol.Coerce(int), vol.Range(min=0, max=100)),
+            vol.Optional(ATTR_WHITE, default=0): vol.All(vol.Coerce(int), vol.Range(min=0, max=255)),
+            vol.Optional(ATTR_TRANSITION_TIME, default=DEFAULT_TRANSITION_TIME): cv.positive_int,
+        }
+    ),
+)
+
+_PANEL_FRAMES_SCHEMA = vol.Schema(
+    {
+        vol.Exclusive(ATTR_PANEL_ID, "panel_target"): cv.positive_int,
+        vol.Exclusive(ATTR_NUMBER, "panel_target"): cv.positive_int,
+        vol.Required(ATTR_FRAMES): vol.All([_FRAME_SCHEMA], vol.Length(min=2)),
+    }
+)
+
+_PANEL_ANIMATION_SCHEMA = vol.Schema(
+    {
+        vol.Exclusive(ATTR_PANEL_ID, "panel_target"): cv.positive_int,
+        vol.Exclusive(ATTR_NUMBER, "panel_target"): cv.positive_int,
+        vol.Required(ATTR_ANIMATION): vol.In(["breathe", "pulse", "strobe", "cycle", "fade"]),
+        vol.Required(ATTR_COLOR): _COLOR_SCHEMA,
+        vol.Optional(ATTR_SPEED, default="medium"): vol.In(["slow", "medium", "fast"]),
+        vol.Optional(ATTR_FALLBACK): _COLOR_SCHEMA,
+        vol.Optional(ATTR_CONDITION): vol.Any(str, bool),
+    }
+)
+
+_PANEL_SCHEMA = vol.Any(
+    vol.Schema(
+        {
+            **_PANEL_TARGET_SCHEMA,
+            vol.Required(ATTR_HUE): vol.All(vol.Coerce(int), vol.Range(min=0, max=360)),
+            vol.Required(ATTR_SATURATION): vol.All(vol.Coerce(int), vol.Range(min=0, max=100)),
+            vol.Required(ATTR_BRIGHTNESS): vol.All(vol.Coerce(int), vol.Range(min=0, max=100)),
+        }
+    ),
+    vol.Schema(
+        {
+            **_PANEL_TARGET_SCHEMA,
+            vol.Required(ATTR_R): vol.All(vol.Coerce(int), vol.Range(min=0, max=255)),
+            vol.Required(ATTR_G): vol.All(vol.Coerce(int), vol.Range(min=0, max=255)),
+            vol.Required(ATTR_B): vol.All(vol.Coerce(int), vol.Range(min=0, max=255)),
+        }
+    ),
+    _PANEL_FRAMES_SCHEMA,
+    _PANEL_ANIMATION_SCHEMA,
+)
+
+SERVICE_SET_PANELS_SCHEMA = vol.Schema(
+    {
+        vol.Required(ATTR_ENTITY_ID): cv.entity_id,
+        vol.Required(ATTR_PANELS): vol.All([_PANEL_SCHEMA], vol.Length(min=1)),
+    }
+)
+
+
+def _resolve_rgb(color: Mapping[str, int]) -> tuple[int, int, int]:
+    if ATTR_HUE in color:
+        return tuple(
+            round(c * 255)
+            for c in colorsys.hsv_to_rgb(
+                color[ATTR_HUE] / 360,
+                color[ATTR_SATURATION] / 100,
+                color[ATTR_BRIGHTNESS] / 100,
+            )
+        )  # type: ignore[return-value]
+    return color[ATTR_R], color[ATTR_G], color[ATTR_B]
+
+
+def _get_speed_transition_time(speed: str) -> int:
+    """Map speed string to transition time."""
+    return {"slow": SPEED_SLOW, "medium": SPEED_MEDIUM, "fast": SPEED_FAST}.get(
+        speed, SPEED_MEDIUM
+    )
+
+
+def _generate_preset_frames(
+    preset: str, color: tuple[int, int, int], speed: str
+) -> list[tuple[int, int, int, int, int]]:
+    """Generate frame list from animation preset."""
+    r, g, b = color
+    t = _get_speed_transition_time(speed)
+    t_short = max(1, t // 2)  # Shorter off-time for snappier animations
+
+    if preset == "breathe":
+        # Smooth breathing: peak -> dim -> off -> dim -> peak
+        return [
+            (r, g, b, 0, t),
+            (round(r * 0.6), round(g * 0.6), round(b * 0.6), 0, t),
+            (0, 0, 0, 0, t),
+            (round(r * 0.6), round(g * 0.6), round(b * 0.6), 0, t),
+        ]
+    elif preset == "pulse":
+        # On longer, off briefly
+        return [(r, g, b, 0, t), (0, 0, 0, 0, t_short)]
+    elif preset == "strobe":
+        # Quick double flash, on longer
+        return [
+            (r, g, b, 0, t_short),
+            (0, 0, 0, 0, t_short),
+            (r, g, b, 0, t_short),
+            (0, 0, 0, 0, t),
+        ]
+    elif preset == "cycle":
+        # Cycle through brightness levels
+        return [
+            (r, g, b, 0, t),
+            (round(r * 0.7), round(g * 0.7), round(b * 0.7), 0, t),
+            (round(r * 0.4), round(g * 0.4), round(b * 0.4), 0, t),
+        ]
+    elif preset == "fade":
+        # Fade in and out
+        return [
+            (0, 0, 0, 0, t),
+            (round(r * 0.3), round(g * 0.3), round(b * 0.3), 0, t),
+            (round(r * 0.7), round(g * 0.7), round(b * 0.7), 0, t),
+            (r, g, b, 0, t),
+        ]
+    return [(r, g, b, 0, t)]
+
+
+def _build_anim_data(resolved_panels: list[dict]) -> str:
+    parts = [str(len(resolved_panels))]
+    for panel in resolved_panels:
+        frames = panel["frames"]
+        parts.append(f"{panel['panel_id']} {len(frames)}")
+        for r, g, b, w, t in frames:
+            parts.append(f"{r} {g} {b} {w} {t}")
+    return " ".join(parts)
+
+
+def _parse_anim_data(anim_data_str: str) -> dict[int, tuple[int, int, int, int, int]]:
+    """Parse an animData string into {panel_id: (r, g, b, w, t)}."""
+    parts = list(map(int, anim_data_str.split()))
+    panel_colors: dict[int, tuple[int, int, int, int, int]] = {}
+    idx = 0
+    count = parts[idx]
+    idx += 1
+    for _ in range(count):
+        panel_id = parts[idx]
+        num_colors = parts[idx + 1]
+        r, g, b, w, t = parts[idx + 2], parts[idx + 3], parts[idx + 4], parts[idx + 5], parts[idx + 6]
+        panel_colors[panel_id] = (r, g, b, w, t)
+        idx += 2 + num_colors * 5
+    return panel_colors
+
+
+async def _async_get_current_panel_colors(
+    nanoleaf: Nanoleaf,
+) -> dict[int, tuple[int, int, int, int, int]]:
+    """Request the current static panel colors from the device. Returns {} if unavailable."""
+    try:
+        response = await nanoleaf._request(
+            "put", "effects", {"write": {"command": "request", "animName": "*Static*"}}
+        )
+        data = cast(dict[str, Any], await response.json())
+        response.release()
+        anim_data_str = data.get("animData", "")
+        if anim_data_str:
+            return _parse_anim_data(anim_data_str)
+    except Exception:  # noqa: BLE001
+        pass
+    return {}
+
+
+async def _async_get_panel_order(nanoleaf: Nanoleaf) -> list[int]:
+    response = await nanoleaf._request("get", "")
+    data = cast(dict[str, Any], await response.json())
+    response.release()
+
+    try:
+        return [
+            cast(int, panel["panelId"])
+            for panel in data["panelLayout"]["layout"]["positionData"]
+            if cast(int, panel["panelId"]) != 0
+        ]
+    except KeyError as err:
+        raise HomeAssistantError("Nanoleaf panel layout is not available") from err
+
+
+def _resolve_frame(frame: Mapping[str, int]) -> tuple[int, int, int, int, int]:
+    r, g, b = _resolve_rgb(frame) if ATTR_HUE in frame else (frame[ATTR_R], frame[ATTR_G], frame[ATTR_B])
+    return (r, g, b, frame[ATTR_WHITE], frame[ATTR_TRANSITION_TIME])
+
+
+def _resolve_panels(
+    panels: list[Mapping[str, Any]], panel_order: list[int]
+) -> list[dict[str, Any]]:
+    """Resolve service input to internal format.
+    
+    Returns list of dicts with keys:
+    - panel_id: int
+    - frames: list of (r, g, b, w, t) tuples (for non-conditional panels)
+    - animation: preset name (for conditional/animation panels)
+    - color: (r, g, b) tuple (for animation panels)
+    - speed: str (for animation panels)
+    - fallback: (r, g, b) tuple or None (for conditional panels)
+    - condition: str or None (for conditional panels)
+    """
+    resolved_panels: list[dict[str, Any]] = []
+
+    for panel in panels:
+        if ATTR_PANEL_ID in panel:
+            panel_id = panel[ATTR_PANEL_ID]
+        else:
+            panel_number = panel[ATTR_NUMBER]
+            if panel_number < 1 or panel_number > len(panel_order):
+                raise HomeAssistantError(
+                    f"Panel number {panel_number} is out of range for this Nanoleaf"
+                )
+            panel_id = panel_order[panel_number - 1]
+
+        resolved: dict[str, Any] = {"panel_id": panel_id}
+
+        # Handle animation preset
+        if ATTR_ANIMATION in panel:
+            animation = panel[ATTR_ANIMATION]
+            color = _resolve_rgb(panel[ATTR_COLOR])
+            speed = panel[ATTR_SPEED]
+            resolved["animation"] = animation
+            resolved["color"] = color
+            resolved["speed"] = speed
+            resolved["condition"] = panel.get(ATTR_CONDITION)
+            if ATTR_FALLBACK in panel:
+                resolved["fallback"] = _resolve_rgb(panel[ATTR_FALLBACK])
+            else:
+                resolved["fallback"] = None
+        # Handle manual frames
+        elif ATTR_FRAMES in panel:
+            frames = [_resolve_frame(f) for f in panel[ATTR_FRAMES]]
+            resolved["frames"] = frames
+        # Handle single color
+        else:
+            r, g, b = (
+                _resolve_rgb(panel)
+                if ATTR_HUE in panel
+                else (panel[ATTR_R], panel[ATTR_G], panel[ATTR_B])
+            )
+            white = panel.get(ATTR_WHITE, 0)
+            transition_time = panel.get(ATTR_TRANSITION_TIME, DEFAULT_TRANSITION_TIME)
+            resolved["frames"] = [(r, g, b, white, transition_time)]
+
+        resolved_panels.append(resolved)
+
+    return resolved_panels
+
+
+def _get_nanoleaf_config_entry(hass: HomeAssistant, entity_id: str) -> ConfigEntry:
+    entity_entry = er.async_get(hass).async_get(entity_id)
+    if entity_entry is None:
+        raise HomeAssistantError(f"Entity {entity_id} was not found in the registry")
+
+    entry = hass.config_entries.async_get_entry(entity_entry.config_entry_id)
+    if entry is None or entry.domain != "nanoleaf":
+        raise HomeAssistantError(
+            f"Entity {entity_id} is not managed by the Nanoleaf integration"
+        )
+
+    if CONF_HOST not in entry.data or CONF_TOKEN not in entry.data:
+        raise HomeAssistantError("Nanoleaf host/token data is missing in config entry")
+
+    return entry
+
+
+async def _async_handle_set_panels(hass: HomeAssistant, service_call: ServiceCall) -> None:
+    entry = _get_nanoleaf_config_entry(hass, service_call.data[ATTR_ENTITY_ID])
+
+    async with ClientSession() as session:
+        nanoleaf = Nanoleaf(session, entry.data[CONF_HOST], entry.data[CONF_TOKEN])
+
+        # Fetch the panel layout once (needed for number-based resolution and full-panel write)
+        all_panel_ids = await _async_get_panel_order(nanoleaf)
+
+        # Read current static colors from the device; fall back to in-memory cache
+        current_colors = await _async_get_current_panel_colors(nanoleaf)
+        if not current_colors:
+            current_colors = (
+                hass.data.get(DOMAIN, {}).get("panel_state", {}).get(entry.entry_id, {})
+            )
+
+        # Resolve the panels specified in this service call
+        resolved_panels = _resolve_panels(service_call.data[ATTR_PANELS], all_panel_ids)
+
+        # Process conditions and generate frames
+        final_resolved_panels = []
+        for panel in resolved_panels:
+            # If panel has a condition key, evaluate it to decide between animation and fallback.
+            # The value can be a rendered boolean or a template string.
+            if "condition" in panel:
+                condition_value = panel["condition"]
+                try:
+                    if isinstance(condition_value, bool):
+                        use_animation = condition_value
+                    elif condition_value is None:
+                        use_animation = False
+                    else:
+                        condition_result = Template(condition_value, hass).render()
+                        normalized_result = str(condition_result).strip().lower()
+                        use_animation = normalized_result not in (
+                            "false",
+                            "0",
+                            "",
+                            "none",
+                            "off",
+                            "unavailable",
+                            "unknown",
+                        )
+                except Exception:  # noqa: BLE001
+                    use_animation = False
+
+                if use_animation:
+                    # Use the animation preset
+                    frames = _generate_preset_frames(
+                        panel["animation"], panel["color"], panel["speed"]
+                    )
+                else:
+                    # Use fallback or default off
+                    if panel.get("fallback"):
+                        r, g, b = panel["fallback"]
+                        frames = [(r, g, b, 0, DEFAULT_TRANSITION_TIME)]
+                    else:
+                        frames = [(0, 0, 0, 0, DEFAULT_TRANSITION_TIME)]
+
+                final_resolved_panels.append({"panel_id": panel["panel_id"], "frames": frames})
+            # If panel has animation but no condition, always use it
+            elif "animation" in panel:
+                frames = _generate_preset_frames(
+                    panel["animation"], panel["color"], panel["speed"]
+                )
+                final_resolved_panels.append({"panel_id": panel["panel_id"], "frames": frames})
+            # Otherwise use regular frames
+            else:
+                final_resolved_panels.append(
+                    {"panel_id": panel["panel_id"], "frames": panel["frames"]}
+                )
+
+            # Keep custom mode if animation-capable panels are present to avoid global
+            # re-render flicker when conditions toggle and mode would switch custom<->static.
+            has_animation_panels = any("animation" in p for p in resolved_panels)
+            is_animated = any(len(p["frames"]) > 1 for p in final_resolved_panels)
+            use_custom_mode = has_animation_panels or is_animated
+
+        # Merge: specified panels override current state; others keep their current color
+        resolved_map = {p["panel_id"]: p["frames"] for p in final_resolved_panels}
+        final_panels = [
+            {
+                "panel_id": pid,
+                "frames": resolved_map[pid]
+                if pid in resolved_map
+                else [current_colors[pid]]
+                if pid in current_colors
+                else [(0, 0, 0, 0, DEFAULT_TRANSITION_TIME)],
+            }
+            for pid in all_panel_ids
+        ]
+
+        # In custom mode, ensure every panel has >=2 frames to keep panel state stable.
+        if use_custom_mode:
+            final_panels = [
+                {
+                    "panel_id": p["panel_id"],
+                    "frames": p["frames"]
+                    if len(p["frames"]) > 1
+                    else [p["frames"][0], p["frames"][0]],
+                }
+                for p in final_panels
+            ]
+
+        # Cache the first frame of each panel for future merges
+        hass.data.setdefault(DOMAIN, {}).setdefault("panel_state", {})[entry.entry_id] = {
+            p["panel_id"]: p["frames"][0] for p in final_panels
+        }
+
+        payload = {
+            "write": {
+                "command": "display",
+                "animType": "custom" if use_custom_mode else "static",
+                "animName": "",
+                "animData": _build_anim_data(final_panels),
+                "loop": use_custom_mode,
+                "palette": [],
+            }
+        }
+        response = await nanoleaf._request("put", "effects", payload)
+        response.release()
+
+
+async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
+    hass.data.setdefault(DOMAIN, {})
+
+    # Optional legacy YAML support.
+    if DOMAIN in config:
+        hass.data[DOMAIN][DATA_YAML_CONFIGURED] = True
+
+        async def async_handle_set_panels(call: ServiceCall) -> None:
+            await _async_handle_set_panels(hass, call)
+
+        if not hass.services.has_service(DOMAIN, SERVICE_SET_PANELS):
+            hass.services.async_register(
+                DOMAIN,
+                SERVICE_SET_PANELS,
+                async_handle_set_panels,
+                schema=SERVICE_SET_PANELS_SCHEMA,
+            )
+
+    return True
+
+
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    async def async_handle_set_panels(call: ServiceCall) -> None:
+        await _async_handle_set_panels(hass, call)
+
+    if not hass.services.has_service(DOMAIN, SERVICE_SET_PANELS):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_SET_PANELS,
+            async_handle_set_panels,
+            schema=SERVICE_SET_PANELS_SCHEMA,
+        )
+
+    return True
+
+
+async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    remaining_entries = [
+        e for e in hass.config_entries.async_entries(DOMAIN) if e.entry_id != entry.entry_id
+    ]
+
+    # Remove service when last config entry is removed and YAML is not used.
+    if (
+        not remaining_entries
+        and not hass.data.get(DOMAIN, {}).get(DATA_YAML_CONFIGURED, False)
+        and hass.services.has_service(DOMAIN, SERVICE_SET_PANELS)
+    ):
+        hass.services.async_remove(DOMAIN, SERVICE_SET_PANELS)
+
+    return True
