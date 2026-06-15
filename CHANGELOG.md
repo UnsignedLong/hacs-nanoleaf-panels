@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.1.0
+
+- Added `condition` field default of `true` — animation panels without a condition always animate
+- Added optional per-panel `light` entities — each physical panel can be exposed as an individual HA light entity with color and brightness control
+- Added options flow to enable panel entities and select the target Nanoleaf device per integration entry
+- Added support for multiple Nanoleaf devices — the integration can now be added once per device instead of being limited to a single instance
+- Panel entities use `ColorMode.HS` for correct brightness slider behavior (avoids cascading scaling errors)
+- Panel entities are scoped to the parent Nanoleaf device in the device registry, giving unique entity IDs per device (e.g. `light.nanoleaf_xyz_panel_1`)
+- Panel entities immediately reflect the parent Nanoleaf on/off state via state change tracking
+- Turning off all panel entities automatically turns off the parent Nanoleaf entity
+- When the parent Nanoleaf turns on, panel entities trigger a fresh device poll to pick up current colors
+
 ## 1.0.0
 
 - Initial release

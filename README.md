@@ -1,63 +1,81 @@
 # Nanoleaf Panels for Home Assistant
 
-Control individual Nanoleaf panels from Home Assistant automations with support for:
-
-- Per-panel solid colors
-- Per-panel manual multi-frame animations
-- Built-in animation presets
-- Per-panel conditional animation with fallback colors
-- Safe merge behavior (unspecified panels keep their current state)
-
-This custom integration extends the official Home Assistant Nanoleaf integration and reuses its existing device authentication.
+Control individual Nanoleaf panels from Home Assistant — either via a service call in automations or by interacting with each panel as its own HA light entity.
 
 ## Features
 
-- Works with panel number indexing (1..N) or direct panel IDs
-- Supports RGB and HSB color input
-- Supports controller-side animation loops using Nanoleaf custom effects
-- Built-in animation presets:
-  - breathe: smooth bright -> dim -> off -> dim loop
-  - pulse: on, then short off loop
-  - strobe: quick double flash loop
-  - cycle: full -> medium -> low brightness loop
-  - fade: off -> low -> medium -> full loop
-- Supports condition templates per panel:
-  - If condition is true, run animation preset
-  - If condition is false, apply fallback color
+### Per-panel light entities
+
+When panel entities are enabled (the default), every physical panel is exposed as an individual HA `light` entity with full color and brightness control:
+
+- Turn individual panels on or off from the UI, automations, or voice assistants
+- Set color and brightness per panel independently
+- Panel entities reflect the device state automatically:
+  - Solid color set via the official Nanoleaf integration → all panel entities update to match
+  - Turning off all panel entities automatically turns off the parent Nanoleaf
+  - Panel entities go off immediately when the parent Nanoleaf is turned off
+- Panel entities are scoped to their parent Nanoleaf device in the device registry (unique entity IDs per device, e.g. `light.nanoleaf_xyz_panel_1`)
+- Multiple Nanoleaf devices are supported — add one integration entry per device
+
+### `nanoleaf_panels.set_panels` service
+
+For fine-grained automation control, the service lets you set multiple panels in a single call with support for:
+
+- Per-panel solid colors (RGB or HSB)
+- Per-panel manual multi-frame animations
+- Built-in animation presets: `breathe`, `pulse`, `strobe`, `cycle`, `fade`
+- Per-panel conditional animation with fallback colors
+- Safe merge behavior — unspecified panels keep their current state
 
 ## Requirements
 
 - Home Assistant with the official Nanoleaf integration configured
-- A Nanoleaf Shapes/Canvas/Elements style panel controller supported by the official integration
+- A Nanoleaf Shapes, Canvas, or Elements controller supported by the official integration
 
 ## Installation (HACS)
 
 [![Open your Home Assistant instance and add this repository in HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=UnsignedLong&repository=hacs-nanoleaf-panels&category=integration)
 
 1. Open HACS in Home Assistant.
-2. Go to Integrations.
-3. Open the 3-dot menu, select Custom repositories.
-4. Add your GitHub repository URL as category Integration.
-5. Search for Nanoleaf Panels and install.
-6. Restart Home Assistant.
-7. Go to Settings -> Devices & Services -> Add Integration.
-8. Search for Nanoleaf Panels and finish setup in the UI.
+2. Go to Integrations → 3-dot menu → Custom repositories.
+3. Add this repository URL as category Integration.
+4. Search for **Nanoleaf Panels** and install.
+5. Restart Home Assistant.
+6. Go to **Settings → Devices & Services → Add Integration**.
+7. Search for **Nanoleaf Panels**, select the Nanoleaf light entity to control, and finish setup.
 
-## Service
+To expose panel entities for a second Nanoleaf device, add a second integration entry pointing at that device's entity.
 
-Service name:
+### Options
 
-- nanoleaf_panels.set_panels
+After setup, go to the integration's **Configure** menu to:
+
+- Enable or disable per-panel light entities
+- Change which Nanoleaf entity the integration controls
+
+## Per-panel light entities
+
+Panel entities are named `Panel 1`, `Panel 2`, … and linked to the parent Nanoleaf device. They support:
+
+| Capability | Notes |
+|---|---|
+| On / Off | Turning off all panels also turns off the parent Nanoleaf |
+| Color (HS) | Full hue + saturation control |
+| Brightness | Independent per-panel brightness |
+| State sync | Reflects solid color set via official integration; tracks parent on/off immediately |
+
+## `nanoleaf_panels.set_panels` service
 
 ### Service data
 
-- entity_id: target Nanoleaf light entity from official integration
-- panels: list of panel updates
+| Field | Type | Description |
+|---|---|---|
+| `entity_id` | string | Target Nanoleaf light entity from the official integration |
+| `panels` | list | List of panel updates (see forms below) |
 
-Each panel item can use one of these forms:
+Each panel entry uses `number` (1-based position) or `panel_id` (raw device ID) to identify the panel, then one of the following forms:
 
-1) Solid color
-
+**1) Solid color — RGB**
 ```yaml
 - number: 1
   r: 255
@@ -65,8 +83,7 @@ Each panel item can use one of these forms:
   b: 0
 ```
 
-or
-
+**2) Solid color — HSB**
 ```yaml
 - number: 1
   hue: 30
@@ -74,8 +91,7 @@ or
   brightness: 100
 ```
 
-2) Manual frames
-
+**3) Manual frames**
 ```yaml
 - number: 2
   frames:
@@ -89,8 +105,7 @@ or
       transition_time: 5
 ```
 
-3) Preset animation
-
+**4) Preset animation**
 ```yaml
 - number: 3
   animation: breathe
@@ -101,8 +116,9 @@ or
   speed: slow
 ```
 
-4) Conditional preset animation with fallback
+Available presets: `breathe`, `pulse`, `strobe`, `cycle`, `fade`. Speed values: `slow`, `medium`, `fast`.
 
+**5) Conditional preset animation with fallback**
 ```yaml
 - number: 4
   animation: pulse
@@ -118,11 +134,11 @@ or
   condition: "{{ is_state('binary_sensor.motion', 'on') }}"
 ```
 
-## Example: Mixed status + conditional animations
+If `condition` is omitted the animation always runs. If it evaluates to false the `fallback` color is used instead.
 
-This example shows a single automation that sets all panels at once. Static panels
-use fixed colors, while conditional panels animate when their sensor is active and
-fall back to warm white otherwise. Unspecified panels keep their current state.
+## Example automation: mixed status display
+
+Sets all panels at once. Static panels use fixed colors; conditional panels animate when their sensor is active and show warm white otherwise. Unspecified panels keep their current color.
 
 ```yaml
 alias: Nanoleaf Panel Status
@@ -183,9 +199,10 @@ mode: restart
 
 ## Notes
 
-- transition_time is in units of 100 ms.
+- `transition_time` is in units of 100 ms.
 - Built-in preset animations are rendered as Nanoleaf controller-side custom loops.
-- Unspecified panels are preserved using current static state, then in-memory cache fallback.
+- Panel entity state is updated immediately after a write (no round-trip delay).
+- The integration polls the device every 30 seconds to sync state changed externally.
 
 ## Repository layout
 
@@ -193,14 +210,17 @@ mode: restart
 custom_components/
   nanoleaf_panels/
     __init__.py
+    light.py
+    config_flow.py
     manifest.json
     services.yaml
+    strings.json
 ```
 
 ## Development and releases
 
-- Tag releases using semantic versioning, for example: v1.1.0
-- Keep custom_components/nanoleaf_panels/manifest.json version in sync with releases
+- Tag releases using semantic versioning, e.g. `v1.1.0`
+- Keep `custom_components/nanoleaf_panels/manifest.json` version in sync
 - Create GitHub releases from tags so HACS users can install pinned versions
 
 ## Disclaimer

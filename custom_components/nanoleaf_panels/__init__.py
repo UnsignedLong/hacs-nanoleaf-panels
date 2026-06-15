@@ -11,7 +11,7 @@ from aionanoleaf2 import Nanoleaf
 import voluptuous as vol
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import ATTR_ENTITY_ID, CONF_HOST, CONF_TOKEN
+from homeassistant.const import ATTR_ENTITY_ID, CONF_HOST, CONF_TOKEN, Platform
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv, entity_registry as er
@@ -22,6 +22,10 @@ SERVICE_SET_PANELS = "set_panels"
 
 CONFIG_SCHEMA = cv.empty_config_schema(DOMAIN)
 DATA_YAML_CONFIGURED = "yaml_configured"
+CONF_EXPOSE_PANELS = "expose_panels"
+CONF_NANOLEAF_ENTITY = "nanoleaf_entity"
+
+PLATFORMS = [Platform.LIGHT]
 
 ATTR_PANELS = "panels"
 ATTR_PANEL_ID = "panel_id"
@@ -106,7 +110,7 @@ _PANEL_ANIMATION_SCHEMA = vol.Schema(
         vol.Required(ATTR_COLOR): _COLOR_SCHEMA,
         vol.Optional(ATTR_SPEED, default="medium"): vol.In(["slow", "medium", "fast"]),
         vol.Optional(ATTR_FALLBACK): _COLOR_SCHEMA,
-        vol.Optional(ATTR_CONDITION): vol.Any(str, bool),
+        vol.Optional(ATTR_CONDITION, default=True): vol.Any(str, bool),
     }
 )
 
@@ -347,30 +351,98 @@ def _get_nanoleaf_config_entry(hass: HomeAssistant, entity_id: str) -> ConfigEnt
     return entry
 
 
+async def _async_write_panels(
+    hass: HomeAssistant,
+    nanoleaf: Nanoleaf,
+    nanoleaf_entry_id: str,
+    all_panel_ids: list[int],
+    panels_override: dict[int, list[tuple[int, int, int, int, int]]],
+    *,
+    has_animation_panels: bool = False,
+) -> None:
+    """Merge panel overrides with current device/cache state and write to device.
+
+    panels_override maps panel_id -> list of (r, g, b, w, t) frames.
+    Panels not in panels_override keep their current device/cache color.
+    has_animation_panels keeps the device in custom (loop) mode even when all
+    current frames are static, to prevent flicker when conditions toggle.
+    """
+    # Only trust the *Static* animation when the device is actually running it.
+    # In hs/ct color mode the device ignores the animation and shows a uniform
+    # solid color; the *Static* data would be stale from the last custom write.
+    resp = await nanoleaf._request("get", "")
+    info = cast(dict[str, Any], await resp.json())
+    resp.release()
+    selected_effect = info.get("effects", {}).get("selectedEffect")
+
+    if selected_effect == "*Static*":
+        current_colors = await _async_get_current_panel_colors(nanoleaf)
+    else:
+        current_colors = {}
+
+    if not current_colors:
+        current_colors = (
+            hass.data.get(DOMAIN, {}).get("panel_state", {}).get(nanoleaf_entry_id, {})
+        )
+
+    is_animated = any(len(frames) > 1 for frames in panels_override.values())
+    use_custom_mode = has_animation_panels or is_animated
+
+    final_panels = [
+        {
+            "panel_id": pid,
+            "frames": panels_override[pid]
+            if pid in panels_override
+            else [current_colors[pid]]
+            if pid in current_colors
+            else [(0, 0, 0, 0, DEFAULT_TRANSITION_TIME)],
+        }
+        for pid in all_panel_ids
+    ]
+
+    if use_custom_mode:
+        final_panels = [
+            {
+                "panel_id": p["panel_id"],
+                "frames": p["frames"]
+                if len(p["frames"]) > 1
+                else [p["frames"][0], p["frames"][0]],
+            }
+            for p in final_panels
+        ]
+
+    hass.data.setdefault(DOMAIN, {}).setdefault("panel_state", {})[nanoleaf_entry_id] = {
+        p["panel_id"]: p["frames"][0] for p in final_panels
+    }
+
+    payload = {
+        "write": {
+            "command": "display",
+            "animType": "custom" if use_custom_mode else "static",
+            "animName": "",
+            "animData": _build_anim_data(final_panels),
+            "loop": use_custom_mode,
+            "palette": [],
+        }
+    }
+    response = await nanoleaf._request("put", "effects", payload)
+    response.release()
+
+
 async def _async_handle_set_panels(hass: HomeAssistant, service_call: ServiceCall) -> None:
     entry = _get_nanoleaf_config_entry(hass, service_call.data[ATTR_ENTITY_ID])
 
     async with ClientSession() as session:
         nanoleaf = Nanoleaf(session, entry.data[CONF_HOST], entry.data[CONF_TOKEN])
-
-        # Fetch the panel layout once (needed for number-based resolution and full-panel write)
         all_panel_ids = await _async_get_panel_order(nanoleaf)
-
-        # Read current static colors from the device; fall back to in-memory cache
-        current_colors = await _async_get_current_panel_colors(nanoleaf)
-        if not current_colors:
-            current_colors = (
-                hass.data.get(DOMAIN, {}).get("panel_state", {}).get(entry.entry_id, {})
-            )
-
-        # Resolve the panels specified in this service call
         resolved_panels = _resolve_panels(service_call.data[ATTR_PANELS], all_panel_ids)
 
-        # Process conditions and generate frames
-        final_resolved_panels = []
+        # Keep custom mode if any panel is animation-capable to prevent flicker
+        # when conditions toggle between animation and fallback.
+        has_animation_panels = any("animation" in p for p in resolved_panels)
+
+        panels_override: dict[int, list[tuple[int, int, int, int, int]]] = {}
         for panel in resolved_panels:
-            # If panel has a condition key, evaluate it to decide between animation and fallback.
-            # The value can be a rendered boolean or a template string.
             if "condition" in panel:
                 condition_value = panel["condition"]
                 try:
@@ -380,94 +452,39 @@ async def _async_handle_set_panels(hass: HomeAssistant, service_call: ServiceCal
                         use_animation = False
                     else:
                         condition_result = Template(condition_value, hass).render()
-                        normalized_result = str(condition_result).strip().lower()
-                        use_animation = normalized_result not in (
-                            "false",
-                            "0",
-                            "",
-                            "none",
-                            "off",
-                            "unavailable",
-                            "unknown",
+                        normalized = str(condition_result).strip().lower()
+                        use_animation = normalized not in (
+                            "false", "0", "", "none", "off", "unavailable", "unknown",
                         )
                 except Exception:  # noqa: BLE001
                     use_animation = False
 
                 if use_animation:
-                    # Use the animation preset
                     frames = _generate_preset_frames(
                         panel["animation"], panel["color"], panel["speed"]
                     )
+                elif panel.get("fallback"):
+                    r, g, b = panel["fallback"]
+                    frames = [(r, g, b, 0, DEFAULT_TRANSITION_TIME)]
                 else:
-                    # Use fallback or default off
-                    if panel.get("fallback"):
-                        r, g, b = panel["fallback"]
-                        frames = [(r, g, b, 0, DEFAULT_TRANSITION_TIME)]
-                    else:
-                        frames = [(0, 0, 0, 0, DEFAULT_TRANSITION_TIME)]
-
-                final_resolved_panels.append({"panel_id": panel["panel_id"], "frames": frames})
-            # If panel has animation but no condition, always use it
+                    frames = [(0, 0, 0, 0, DEFAULT_TRANSITION_TIME)]
             elif "animation" in panel:
                 frames = _generate_preset_frames(
                     panel["animation"], panel["color"], panel["speed"]
                 )
-                final_resolved_panels.append({"panel_id": panel["panel_id"], "frames": frames})
-            # Otherwise use regular frames
             else:
-                final_resolved_panels.append(
-                    {"panel_id": panel["panel_id"], "frames": panel["frames"]}
-                )
+                frames = panel["frames"]
 
-            # Keep custom mode if animation-capable panels are present to avoid global
-            # re-render flicker when conditions toggle and mode would switch custom<->static.
-            has_animation_panels = any("animation" in p for p in resolved_panels)
-            is_animated = any(len(p["frames"]) > 1 for p in final_resolved_panels)
-            use_custom_mode = has_animation_panels or is_animated
+            panels_override[panel["panel_id"]] = frames
 
-        # Merge: specified panels override current state; others keep their current color
-        resolved_map = {p["panel_id"]: p["frames"] for p in final_resolved_panels}
-        final_panels = [
-            {
-                "panel_id": pid,
-                "frames": resolved_map[pid]
-                if pid in resolved_map
-                else [current_colors[pid]]
-                if pid in current_colors
-                else [(0, 0, 0, 0, DEFAULT_TRANSITION_TIME)],
-            }
-            for pid in all_panel_ids
-        ]
-
-        # In custom mode, ensure every panel has >=2 frames to keep panel state stable.
-        if use_custom_mode:
-            final_panels = [
-                {
-                    "panel_id": p["panel_id"],
-                    "frames": p["frames"]
-                    if len(p["frames"]) > 1
-                    else [p["frames"][0], p["frames"][0]],
-                }
-                for p in final_panels
-            ]
-
-        # Cache the first frame of each panel for future merges
-        hass.data.setdefault(DOMAIN, {}).setdefault("panel_state", {})[entry.entry_id] = {
-            p["panel_id"]: p["frames"][0] for p in final_panels
-        }
-
-        payload = {
-            "write": {
-                "command": "display",
-                "animType": "custom" if use_custom_mode else "static",
-                "animName": "",
-                "animData": _build_anim_data(final_panels),
-                "loop": use_custom_mode,
-                "palette": [],
-            }
-        }
-        response = await nanoleaf._request("put", "effects", payload)
-        response.release()
+        await _async_write_panels(
+            hass,
+            nanoleaf,
+            entry.entry_id,
+            all_panel_ids,
+            panels_override,
+            has_animation_panels=has_animation_panels,
+        )
 
 
 async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
@@ -491,7 +508,14 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
     return True
 
 
+async def _async_options_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Reload the config entry when options change."""
+    await hass.config_entries.async_reload(entry.entry_id)
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    hass.data.setdefault(DOMAIN, {})
+
     async def async_handle_set_panels(call: ServiceCall) -> None:
         await _async_handle_set_panels(hass, call)
 
@@ -503,15 +527,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             schema=SERVICE_SET_PANELS_SCHEMA,
         )
 
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    entry.async_on_unload(entry.add_update_listener(_async_options_update_listener))
+
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    if not await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
+        return False
+
     remaining_entries = [
         e for e in hass.config_entries.async_entries(DOMAIN) if e.entry_id != entry.entry_id
     ]
 
-    # Remove service when last config entry is removed and YAML is not used.
+    # Remove service when the last config entry is removed and YAML is not used.
     if (
         not remaining_entries
         and not hass.data.get(DOMAIN, {}).get(DATA_YAML_CONFIGURED, False)

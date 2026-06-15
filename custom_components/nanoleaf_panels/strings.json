@@ -3,11 +3,29 @@
     "step": {
       "user": {
         "title": "Nanoleaf Panels",
-        "description": "Enable the Nanoleaf Panels service."
+        "description": "Select the Nanoleaf device to manage panels for.",
+        "data": {
+          "nanoleaf_entity": "Nanoleaf light entity"
+        }
       }
     },
     "abort": {
-      "single_instance_allowed": "Only a single configuration of Nanoleaf Panels is allowed."
+      "already_configured": "This Nanoleaf device is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Panel Options",
+        "data": {
+          "expose_panels": "Expose individual panels as light entities",
+          "nanoleaf_entity": "Nanoleaf light entity"
+        },
+        "data_description": {
+          "expose_panels": "Creates a separate light entity for each physical panel, allowing direct color control from the Home Assistant UI and automations.",
+          "nanoleaf_entity": "The Nanoleaf light entity whose panels to expose. Requires the Nanoleaf integration to be set up."
+        }
+      }
     }
   }
 }
