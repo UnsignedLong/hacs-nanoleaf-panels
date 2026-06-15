@@ -1,0 +1,58 @@
+set_panels:
+  name: Set panels
+  description: Set individual Nanoleaf panels to specific colors or animations.
+  fields:
+    entity_id:
+      name: Entity
+      description: Nanoleaf light entity to control.
+      required: true
+      selector:
+        entity:
+          domain: light
+          integration: nanoleaf
+          multiple: false
+    panels:
+      name: Panels
+      description: >
+        List of panel updates. Each panel is addressed by number (1–9) or panel_id.
+        
+        **Solid Color**: Use r/g/b or hue/saturation/brightness for a single color.
+        
+        **Manual Frames**: Use frames (list of 2+ colors) for a looping animation.
+        
+        **Preset Animation**: Use animation (breathe, pulse, strobe, cycle, fade) with color and speed.
+        Can optionally include condition (Jinja2 template) to toggle between animation and fallback.
+      required: true
+      example:
+        - number: 1
+          r: 255
+          g: 0
+          b: 0
+        - number: 2
+          animation: breathe
+          color:
+            r: 255
+            g: 150
+            b: 0
+          speed: slow
+        - number: 3
+          animation: pulse
+          color:
+            hue: 30
+            saturation: 100
+            brightness: 100
+          fallback:
+            r: 200
+            g: 200
+            b: 200
+          condition: "{{ is_state('binary_sensor.motion', 'on') }}"
+        - number: 4
+          frames:
+            - r: 255
+              g: 0
+              b: 0
+              transition_time: 5
+            - r: 0
+              g: 0
+              b: 255
+              transition_time: 5
