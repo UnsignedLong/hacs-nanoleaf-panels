@@ -8,6 +8,7 @@ creating a new ``ClientSession`` on every API call.
 
 from __future__ import annotations
 
+import logging
 from typing import Any, cast
 
 from aionanoleaf2 import Nanoleaf
@@ -15,6 +16,8 @@ from aionanoleaf2 import Nanoleaf
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def _parse_anim_data(anim_data_str: str) -> dict[int, tuple[int, int, int, int, int]]:
@@ -50,7 +53,13 @@ class NanoleafApiClient:
     """
 
     def __init__(self, hass: HomeAssistant, host: str, token: str) -> None:
+        self._host = host
         self._nanoleaf = Nanoleaf(async_get_clientsession(hass), host, token)
+
+    @property
+    def host(self) -> str:
+        """Return the device host address."""
+        return self._host
 
     async def async_get_device_info(self) -> dict[str, Any]:
         """Fetch full device info from the Nanoleaf."""
@@ -86,8 +95,8 @@ class NanoleafApiClient:
             anim_data_str = data.get("animData", "")
             if anim_data_str:
                 return _parse_anim_data(anim_data_str)
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.debug("Could not fetch current panel colors: %s", err)
         return {}
 
     async def async_write_effects(self, payload: dict[str, Any]) -> None:
