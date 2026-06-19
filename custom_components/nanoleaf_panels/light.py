@@ -70,7 +70,7 @@ class NanoleafPanelCoordinator(
             hass,
             _LOGGER,
             name=f"Nanoleaf panels ({api_client.host})",
-            update_interval=timedelta(seconds=30),
+            update_interval=timedelta(seconds=60),
         )
         self._api_client = api_client
         self._nanoleaf_entry_id = nanoleaf_entry_id
@@ -367,7 +367,7 @@ async def async_setup_entry(
 
     # When the parent Nanoleaf entity changes state (on ↔ off ↔ unavailable):
     # - Turning OFF: re-broadcast current data immediately so panel entities
-    #   reflect "off" without waiting for the next 30 s poll.
+    #   reflect "off" without waiting for the next 60 s poll.
     # - Turning ON:  trigger a real device poll so panel entities pick up the
     #   actual current colors (works well in static mode; in effect mode the
     #   poll returns nothing and panels keep their last cached state).

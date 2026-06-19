@@ -202,7 +202,7 @@ mode: restart
 - `transition_time` is in units of 100 ms.
 - Built-in preset animations are rendered as Nanoleaf controller-side custom loops.
 - Panel entity state is updated immediately after a write (no round-trip delay).
-- The integration polls the device every 30 seconds to sync state changed externally.
+- The integration polls the device every 60 seconds to sync state changed externally.
 
 ## Repository layout
 
