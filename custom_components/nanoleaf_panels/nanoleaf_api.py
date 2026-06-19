@@ -96,7 +96,7 @@ class NanoleafApiClient:
             if anim_data_str:
                 return _parse_anim_data(anim_data_str)
         except Exception as err:  # noqa: BLE001
-            _LOGGER.debug("Could not fetch current panel colors: %s", err)
+            _LOGGER.debug("Could not fetch current panel colors from %s: %s", self._host, err)
         return {}
 
     async def async_write_effects(self, payload: dict[str, Any]) -> None:

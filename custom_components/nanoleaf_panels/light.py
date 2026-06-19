@@ -33,6 +33,7 @@ from . import (
     DEFAULT_TRANSITION_TIME,
     DOMAIN,
     _async_write_panels,
+    _get_or_create_api_client,
 )
 from .nanoleaf_api import NanoleafApiClient
 
@@ -349,10 +350,9 @@ async def async_setup_entry(
         if device_entry is not None:
             device_info = DeviceInfo(identifiers=device_entry.identifiers)
 
-    api_client = NanoleafApiClient(hass, host, token)
+    api_client = _get_or_create_api_client(hass, nanoleaf_entry_id, host, token)
     # Register the client so the service handler reuses this instance
     # instead of creating a second one for the same device.
-    hass.data.setdefault(DOMAIN, {}).setdefault("clients", {})[nanoleaf_entry_id] = api_client
     try:
         panel_ids = await api_client.async_get_panel_order()
     except Exception as err:  # noqa: BLE001

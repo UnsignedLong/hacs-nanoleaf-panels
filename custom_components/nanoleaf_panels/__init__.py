@@ -302,6 +302,18 @@ def _get_nanoleaf_config_entry(hass: HomeAssistant, entity_id: str) -> ConfigEnt
     return entry
 
 
+def _get_or_create_api_client(
+    hass: HomeAssistant, nanoleaf_entry_id: str, host: str, token: str
+) -> NanoleafApiClient:
+    """Return the cached NanoleafApiClient for the given entry, creating it if needed."""
+    clients: dict[str, NanoleafApiClient] = (
+        hass.data.setdefault(DOMAIN, {}).setdefault("clients", {})
+    )
+    if nanoleaf_entry_id not in clients:
+        clients[nanoleaf_entry_id] = NanoleafApiClient(hass, host, token)
+    return clients[nanoleaf_entry_id]
+
+
 async def _async_write_panels(
     hass: HomeAssistant,
     api_client: NanoleafApiClient,
@@ -380,14 +392,9 @@ async def _async_write_panels(
 async def _async_handle_set_panels(hass: HomeAssistant, service_call: ServiceCall) -> None:
     entry = _get_nanoleaf_config_entry(hass, service_call.data[ATTR_ENTITY_ID])
 
-    clients: dict[str, NanoleafApiClient] = (
-        hass.data.setdefault(DOMAIN, {}).setdefault("clients", {})
+    api_client = _get_or_create_api_client(
+        hass, entry.entry_id, entry.data[CONF_HOST], entry.data[CONF_TOKEN]
     )
-    if entry.entry_id not in clients:
-        clients[entry.entry_id] = NanoleafApiClient(
-            hass, entry.data[CONF_HOST], entry.data[CONF_TOKEN]
-        )
-    api_client = clients[entry.entry_id]
 
     all_panel_ids = await api_client.async_get_panel_order()
     resolved_panels = _resolve_panels(service_call.data[ATTR_PANELS], all_panel_ids)
