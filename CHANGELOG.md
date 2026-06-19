@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.1
+
+- Isolated all aionanoleaf2 private `_request` calls into a single `NanoleafApiClient` adapter module — breakage from library updates is now confined to one place
+- Replaced per-call `ClientSession` creation with the shared Home Assistant HTTP session (`async_get_clientsession`), reducing connection overhead and latency
+- The coordinator and service handler now share a single `NanoleafApiClient` instance per device
+- Increased panel light entity device polling interval from 30 seconds to 60 seconds
+
 ## 1.1.0
 
 - Added `condition` field default of `true` — animation panels without a condition always animate

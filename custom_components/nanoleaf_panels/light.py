@@ -8,9 +8,6 @@ import logging
 import math
 from typing import Any
 
-from aiohttp import ClientSession
-from aionanoleaf2 import Nanoleaf
-
 from homeassistant.components.light import (
     ATTR_BRIGHTNESS,
     ATTR_HS_COLOR,
@@ -35,10 +32,10 @@ from . import (
     CONF_NANOLEAF_ENTITY,
     DEFAULT_TRANSITION_TIME,
     DOMAIN,
-    _async_get_current_panel_colors,
-    _async_get_panel_order,
     _async_write_panels,
+    _get_or_create_api_client,
 )
+from .nanoleaf_api import NanoleafApiClient
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -65,19 +62,17 @@ class NanoleafPanelCoordinator(
     def __init__(
         self,
         hass: HomeAssistant,
-        host: str,
-        token: str,
+        api_client: NanoleafApiClient,
         nanoleaf_entry_id: str,
         nanoleaf_entity_id: str,
     ) -> None:
         super().__init__(
             hass,
             _LOGGER,
-            name=f"Nanoleaf panels ({host})",
-            update_interval=timedelta(seconds=30),
+            name=f"Nanoleaf panels ({api_client.host})",
+            update_interval=timedelta(seconds=60),
         )
-        self._host = host
-        self._token = token
+        self._api_client = api_client
         self._nanoleaf_entry_id = nanoleaf_entry_id
         self.nanoleaf_entity_id = nanoleaf_entity_id
         self.panel_ids: list[int] = []
@@ -96,43 +91,37 @@ class NanoleafPanelCoordinator(
         )
 
         try:
-            async with ClientSession() as session:
-                nanoleaf = Nanoleaf(session, self._host, self._token)
+            info = await self._api_client.async_get_device_info()
 
-                # Fetch full device info to determine color mode.
-                resp = await nanoleaf._request("get", "")
-                info: dict = await resp.json()
-                resp.release()
+            state = info.get("state", {})
+            selected_effect = info.get("effects", {}).get("selectedEffect")
+            color_mode = state.get("colorMode", "")
 
-                state = info.get("state", {})
-                selected_effect = info.get("effects", {}).get("selectedEffect")
-                color_mode = state.get("colorMode", "")
+            if selected_effect == "*Static*":
+                # Device is running our custom per-panel animation.
+                device_colors = await self._api_client.async_get_current_panel_colors()
+                self.last_poll_had_device_data = bool(device_colors)
+                return {**cache, **device_colors}
 
-                if selected_effect == "*Static*":
-                    # Device is running our custom per-panel animation.
-                    device_colors = await _async_get_current_panel_colors(nanoleaf)
-                    self.last_poll_had_device_data = bool(device_colors)
-                    return {**cache, **device_colors}
-
-                if color_mode in ("hs", "ct"):
-                    # Uniform color set via the official integration.
-                    # Derive per-panel color from device state so all panels
-                    # reflect the correct color and brightness.
-                    bri = state.get("brightness", {}).get("value", 100) / 100
-                    if color_mode == "hs":
-                        h = state.get("hue", {}).get("value", 0) / 360
-                        s = state.get("sat", {}).get("value", 100) / 100
-                        r, g, b = colorsys.hsv_to_rgb(h, s, bri)
-                        rgb = (round(r * 255), round(g * 255), round(b * 255))
-                    else:
-                        ct = state.get("ct", {}).get("value", 4000)
-                        rgb = _kelvin_to_rgb(ct, bri)
-                    uniform: dict[int, tuple[int, int, int, int, int]] = {
-                        pid: (*rgb, 0, DEFAULT_TRANSITION_TIME)
-                        for pid in self.panel_ids
-                    }
-                    self.last_poll_had_device_data = True
-                    return {**cache, **uniform}
+            if color_mode in ("hs", "ct"):
+                # Uniform color set via the official integration.
+                # Derive per-panel color from device state so all panels
+                # reflect the correct color and brightness.
+                bri = state.get("brightness", {}).get("value", 100) / 100
+                if color_mode == "hs":
+                    h = state.get("hue", {}).get("value", 0) / 360
+                    s = state.get("sat", {}).get("value", 100) / 100
+                    r, g, b = colorsys.hsv_to_rgb(h, s, bri)
+                    rgb = (round(r * 255), round(g * 255), round(b * 255))
+                else:
+                    ct = state.get("ct", {}).get("value", 4000)
+                    rgb = _kelvin_to_rgb(ct, bri)
+                uniform: dict[int, tuple[int, int, int, int, int]] = {
+                    pid: (*rgb, 0, DEFAULT_TRANSITION_TIME)
+                    for pid in self.panel_ids
+                }
+                self.last_poll_had_device_data = True
+                return {**cache, **uniform}
 
         except Exception as err:  # noqa: BLE001
             raise UpdateFailed(f"Failed to fetch Nanoleaf state: {err}") from err
@@ -254,15 +243,13 @@ class NanoleafPanelLight(
                 self.coordinator._nanoleaf_entry_id
             ] = dict(self.coordinator.data)
 
-        async with ClientSession() as session:
-            nl = Nanoleaf(session, self.coordinator._host, self.coordinator._token)
-            await _async_write_panels(
-                self.hass,
-                nl,
-                self.coordinator._nanoleaf_entry_id,
-                self.coordinator.panel_ids,
-                panels_override,
-            )
+        await _async_write_panels(
+            self.hass,
+            self.coordinator._api_client,
+            self.coordinator._nanoleaf_entry_id,
+            self.coordinator.panel_ids,
+            panels_override,
+        )
         # Push the written state directly into the coordinator instead of
         # re-polling the device.  This avoids a race where the device hasn't
         # updated its *Static* animation yet when we immediately read it back.
@@ -288,15 +275,13 @@ class NanoleafPanelLight(
                 self.coordinator._nanoleaf_entry_id
             ] = dict(self.coordinator.data)
 
-        async with ClientSession() as session:
-            nl = Nanoleaf(session, self.coordinator._host, self.coordinator._token)
-            await _async_write_panels(
-                self.hass,
-                nl,
-                self.coordinator._nanoleaf_entry_id,
-                self.coordinator.panel_ids,
-                {self._panel_id: [(0, 0, 0, 0, DEFAULT_TRANSITION_TIME)]},
-            )
+        await _async_write_panels(
+            self.hass,
+            self.coordinator._api_client,
+            self.coordinator._nanoleaf_entry_id,
+            self.coordinator.panel_ids,
+            {self._panel_id: [(0, 0, 0, 0, DEFAULT_TRANSITION_TIME)]},
+        )
 
         # Push the written state directly into the coordinator.
         new_data = dict(
@@ -365,23 +350,24 @@ async def async_setup_entry(
         if device_entry is not None:
             device_info = DeviceInfo(identifiers=device_entry.identifiers)
 
+    api_client = _get_or_create_api_client(hass, nanoleaf_entry_id, host, token)
+    # Register the client so the service handler reuses this instance
+    # instead of creating a second one for the same device.
     try:
-        async with ClientSession() as session:
-            nl = Nanoleaf(session, host, token)
-            panel_ids = await _async_get_panel_order(nl)
+        panel_ids = await api_client.async_get_panel_order()
     except Exception as err:  # noqa: BLE001
         _LOGGER.error("Failed to fetch Nanoleaf panel layout: %s", err)
         return
 
     coordinator = NanoleafPanelCoordinator(
-        hass, host, token, nanoleaf_entry_id, nanoleaf_entity_id
+        hass, api_client, nanoleaf_entry_id, nanoleaf_entity_id
     )
     coordinator.panel_ids = panel_ids
     await coordinator.async_config_entry_first_refresh()
 
     # When the parent Nanoleaf entity changes state (on ↔ off ↔ unavailable):
     # - Turning OFF: re-broadcast current data immediately so panel entities
-    #   reflect "off" without waiting for the next 30 s poll.
+    #   reflect "off" without waiting for the next 60 s poll.
     # - Turning ON:  trigger a real device poll so panel entities pick up the
     #   actual current colors (works well in static mode; in effect mode the
     #   poll returns nothing and panels keep their last cached state).
