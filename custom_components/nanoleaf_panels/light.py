@@ -46,7 +46,14 @@ def _kelvin_to_rgb(kelvin: int, brightness: float) -> tuple[int, int, int]:
     if temp <= 66:
         r = 255
         g = max(0, min(255, round(99.4708025861 * math.log(temp) - 161.1195681661)))
-        b = 0 if temp <= 19 else max(0, min(255, round(138.5177312231 * math.log(temp - 10) - 305.0447927307)))
+        b = (
+            0
+            if temp <= 19
+            else max(
+                0,
+                min(255, round(138.5177312231 * math.log(temp - 10) - 305.0447927307)),
+            )
+        )
     else:
         r = max(0, min(255, round(329.698727446 * (temp - 60) ** -0.1332047592)))
         g = max(0, min(255, round(288.1221695283 * (temp - 60) ** -0.0755148492)))
@@ -117,8 +124,7 @@ class NanoleafPanelCoordinator(
                     ct = state.get("ct", {}).get("value", 4000)
                     rgb = _kelvin_to_rgb(ct, bri)
                 uniform: dict[int, tuple[int, int, int, int, int]] = {
-                    pid: (*rgb, 0, DEFAULT_TRANSITION_TIME)
-                    for pid in self.panel_ids
+                    pid: (*rgb, 0, DEFAULT_TRANSITION_TIME) for pid in self.panel_ids
                 }
                 self.last_poll_had_device_data = True
                 return {**cache, **uniform}
@@ -131,9 +137,7 @@ class NanoleafPanelCoordinator(
         return cache
 
 
-class NanoleafPanelLight(
-    CoordinatorEntity[NanoleafPanelCoordinator], LightEntity
-):
+class NanoleafPanelLight(CoordinatorEntity[NanoleafPanelCoordinator], LightEntity):
     """A light entity representing a single Nanoleaf panel."""
 
     _attr_color_mode = ColorMode.HS
@@ -334,6 +338,16 @@ async def async_setup_entry(
     if nanoleaf_config_entry is None or nanoleaf_config_entry.domain != "nanoleaf":
         _LOGGER.error(
             "Could not find a Nanoleaf config entry for entity '%s'",
+            nanoleaf_entity_id,
+        )
+        return
+
+    if (
+        CONF_HOST not in nanoleaf_config_entry.data
+        or CONF_TOKEN not in nanoleaf_config_entry.data
+    ):
+        _LOGGER.error(
+            "Nanoleaf config entry for entity '%s' is missing host/token data",
             nanoleaf_entity_id,
         )
         return
