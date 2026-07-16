@@ -13,6 +13,17 @@ from homeassistant.helpers.selector import (
 from . import CONF_EXPOSE_PANELS, CONF_NANOLEAF_ENTITY, DOMAIN
 
 
+def _entity_is_configured(
+    entries, entity_id: str, current_entry_id: str | None = None
+) -> bool:
+    """Return whether a Nanoleaf entity is already used by another entry."""
+    return any(
+        entry.entry_id != current_entry_id
+        and entry.options.get(CONF_NANOLEAF_ENTITY) == entity_id
+        for entry in entries
+    )
+
+
 class NanoleafPanelsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Nanoleaf Panels."""
 
@@ -23,9 +34,8 @@ class NanoleafPanelsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             entity_id: str = user_input[CONF_NANOLEAF_ENTITY]
 
             # Prevent the same Nanoleaf entity from being configured twice.
-            for entry in self._async_current_entries():
-                if entry.options.get(CONF_NANOLEAF_ENTITY) == entity_id:
-                    return self.async_abort(reason="already_configured")
+            if _entity_is_configured(self._async_current_entries(), entity_id):
+                return self.async_abort(reason="already_configured")
 
             state = self.hass.states.get(entity_id)
             title = state.name if state else entity_id
@@ -62,8 +72,18 @@ class NanoleafPanelsOptionsFlow(config_entries.OptionsFlow):
     """Handle options for Nanoleaf Panels."""
 
     async def async_step_init(self, user_input=None):
+        errors: dict[str, str] = {}
+
         if user_input is not None:
-            return self.async_create_entry(data=user_input)
+            entity_id: str = user_input.get(CONF_NANOLEAF_ENTITY, "")
+            if _entity_is_configured(
+                self.hass.config_entries.async_entries(DOMAIN),
+                entity_id,
+                self.config_entry.entry_id,
+            ):
+                errors[CONF_NANOLEAF_ENTITY] = "already_configured"
+            else:
+                return self.async_create_entry(data=user_input)
 
         return self.async_show_form(
             step_id="init",
@@ -71,7 +91,9 @@ class NanoleafPanelsOptionsFlow(config_entries.OptionsFlow):
                 {
                     vol.Optional(
                         CONF_EXPOSE_PANELS,
-                        default=self.config_entry.options.get(CONF_EXPOSE_PANELS, False),
+                        default=self.config_entry.options.get(
+                            CONF_EXPOSE_PANELS, False
+                        ),
                     ): BooleanSelector(),
                     vol.Optional(
                         CONF_NANOLEAF_ENTITY,
@@ -81,4 +103,5 @@ class NanoleafPanelsOptionsFlow(config_entries.OptionsFlow):
                     ),
                 }
             ),
+            errors=errors,
         )

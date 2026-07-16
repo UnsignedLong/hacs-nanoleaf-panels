@@ -26,6 +26,9 @@
           "nanoleaf_entity": "The Nanoleaf light entity whose panels to expose. Requires the Nanoleaf integration to be set up."
         }
       }
+    },
+    "error": {
+      "already_configured": "This Nanoleaf device is already configured."
     }
   }
 }

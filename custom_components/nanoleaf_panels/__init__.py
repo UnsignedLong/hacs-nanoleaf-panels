@@ -52,7 +52,9 @@ SPEED_FAST = 5
 _PANEL_TARGET_SCHEMA = {
     vol.Exclusive(ATTR_PANEL_ID, "panel_target"): cv.positive_int,
     vol.Exclusive(ATTR_NUMBER, "panel_target"): cv.positive_int,
-    vol.Optional(ATTR_WHITE, default=0): vol.All(vol.Coerce(int), vol.Range(min=0, max=255)),
+    vol.Optional(ATTR_WHITE, default=0): vol.All(
+        vol.Coerce(int), vol.Range(min=0, max=255)
+    ),
     vol.Optional(ATTR_TRANSITION_TIME): cv.positive_int,
 }
 
@@ -67,8 +69,12 @@ _COLOR_SCHEMA = vol.Any(
     vol.Schema(
         {
             vol.Required(ATTR_HUE): vol.All(vol.Coerce(int), vol.Range(min=0, max=360)),
-            vol.Required(ATTR_SATURATION): vol.All(vol.Coerce(int), vol.Range(min=0, max=100)),
-            vol.Required(ATTR_BRIGHTNESS): vol.All(vol.Coerce(int), vol.Range(min=0, max=100)),
+            vol.Required(ATTR_SATURATION): vol.All(
+                vol.Coerce(int), vol.Range(min=0, max=100)
+            ),
+            vol.Required(ATTR_BRIGHTNESS): vol.All(
+                vol.Coerce(int), vol.Range(min=0, max=100)
+            ),
         }
     ),
 )
@@ -79,17 +85,29 @@ _FRAME_SCHEMA = vol.Any(
             vol.Required(ATTR_R): vol.All(vol.Coerce(int), vol.Range(min=0, max=255)),
             vol.Required(ATTR_G): vol.All(vol.Coerce(int), vol.Range(min=0, max=255)),
             vol.Required(ATTR_B): vol.All(vol.Coerce(int), vol.Range(min=0, max=255)),
-            vol.Optional(ATTR_WHITE, default=0): vol.All(vol.Coerce(int), vol.Range(min=0, max=255)),
-            vol.Optional(ATTR_TRANSITION_TIME, default=DEFAULT_TRANSITION_TIME): cv.positive_int,
+            vol.Optional(ATTR_WHITE, default=0): vol.All(
+                vol.Coerce(int), vol.Range(min=0, max=255)
+            ),
+            vol.Optional(
+                ATTR_TRANSITION_TIME, default=DEFAULT_TRANSITION_TIME
+            ): cv.positive_int,
         }
     ),
     vol.Schema(
         {
             vol.Required(ATTR_HUE): vol.All(vol.Coerce(int), vol.Range(min=0, max=360)),
-            vol.Required(ATTR_SATURATION): vol.All(vol.Coerce(int), vol.Range(min=0, max=100)),
-            vol.Required(ATTR_BRIGHTNESS): vol.All(vol.Coerce(int), vol.Range(min=0, max=100)),
-            vol.Optional(ATTR_WHITE, default=0): vol.All(vol.Coerce(int), vol.Range(min=0, max=255)),
-            vol.Optional(ATTR_TRANSITION_TIME, default=DEFAULT_TRANSITION_TIME): cv.positive_int,
+            vol.Required(ATTR_SATURATION): vol.All(
+                vol.Coerce(int), vol.Range(min=0, max=100)
+            ),
+            vol.Required(ATTR_BRIGHTNESS): vol.All(
+                vol.Coerce(int), vol.Range(min=0, max=100)
+            ),
+            vol.Optional(ATTR_WHITE, default=0): vol.All(
+                vol.Coerce(int), vol.Range(min=0, max=255)
+            ),
+            vol.Optional(
+                ATTR_TRANSITION_TIME, default=DEFAULT_TRANSITION_TIME
+            ): cv.positive_int,
         }
     ),
 )
@@ -106,7 +124,9 @@ _PANEL_ANIMATION_SCHEMA = vol.Schema(
     {
         vol.Exclusive(ATTR_PANEL_ID, "panel_target"): cv.positive_int,
         vol.Exclusive(ATTR_NUMBER, "panel_target"): cv.positive_int,
-        vol.Required(ATTR_ANIMATION): vol.In(["breathe", "pulse", "strobe", "cycle", "fade"]),
+        vol.Required(ATTR_ANIMATION): vol.In(
+            ["breathe", "pulse", "strobe", "cycle", "fade"]
+        ),
         vol.Required(ATTR_COLOR): _COLOR_SCHEMA,
         vol.Optional(ATTR_SPEED, default="medium"): vol.In(["slow", "medium", "fast"]),
         vol.Optional(ATTR_FALLBACK): _COLOR_SCHEMA,
@@ -119,8 +139,12 @@ _PANEL_SCHEMA = vol.Any(
         {
             **_PANEL_TARGET_SCHEMA,
             vol.Required(ATTR_HUE): vol.All(vol.Coerce(int), vol.Range(min=0, max=360)),
-            vol.Required(ATTR_SATURATION): vol.All(vol.Coerce(int), vol.Range(min=0, max=100)),
-            vol.Required(ATTR_BRIGHTNESS): vol.All(vol.Coerce(int), vol.Range(min=0, max=100)),
+            vol.Required(ATTR_SATURATION): vol.All(
+                vol.Coerce(int), vol.Range(min=0, max=100)
+            ),
+            vol.Required(ATTR_BRIGHTNESS): vol.All(
+                vol.Coerce(int), vol.Range(min=0, max=100)
+            ),
         }
     ),
     vol.Schema(
@@ -219,7 +243,11 @@ def _build_anim_data(resolved_panels: list[dict]) -> str:
 
 
 def _resolve_frame(frame: Mapping[str, int]) -> tuple[int, int, int, int, int]:
-    r, g, b = _resolve_rgb(frame) if ATTR_HUE in frame else (frame[ATTR_R], frame[ATTR_G], frame[ATTR_B])
+    r, g, b = (
+        _resolve_rgb(frame)
+        if ATTR_HUE in frame
+        else (frame[ATTR_R], frame[ATTR_G], frame[ATTR_B])
+    )
     return (r, g, b, frame[ATTR_WHITE], frame[ATTR_TRANSITION_TIME])
 
 
@@ -227,7 +255,7 @@ def _resolve_panels(
     panels: list[Mapping[str, Any]], panel_order: list[int]
 ) -> list[dict[str, Any]]:
     """Resolve service input to internal format.
-    
+
     Returns list of dicts with keys:
     - panel_id: int
     - frames: list of (r, g, b, w, t) tuples (for non-conditional panels)
@@ -306,8 +334,8 @@ def _get_or_create_api_client(
     hass: HomeAssistant, nanoleaf_entry_id: str, host: str, token: str
 ) -> NanoleafApiClient:
     """Return the cached NanoleafApiClient for the given entry, creating it if needed."""
-    clients: dict[str, NanoleafApiClient] = (
-        hass.data.setdefault(DOMAIN, {}).setdefault("clients", {})
+    clients: dict[str, NanoleafApiClient] = hass.data.setdefault(DOMAIN, {}).setdefault(
+        "clients", {}
     )
     if nanoleaf_entry_id not in clients:
         clients[nanoleaf_entry_id] = NanoleafApiClient(hass, host, token)
@@ -372,9 +400,9 @@ async def _async_write_panels(
             for p in final_panels
         ]
 
-    hass.data.setdefault(DOMAIN, {}).setdefault("panel_state", {})[nanoleaf_entry_id] = {
-        p["panel_id"]: p["frames"][0] for p in final_panels
-    }
+    hass.data.setdefault(DOMAIN, {}).setdefault("panel_state", {})[
+        nanoleaf_entry_id
+    ] = {p["panel_id"]: p["frames"][0] for p in final_panels}
 
     payload = {
         "write": {
@@ -389,7 +417,9 @@ async def _async_write_panels(
     await api_client.async_write_effects(payload)
 
 
-async def _async_handle_set_panels(hass: HomeAssistant, service_call: ServiceCall) -> None:
+async def _async_handle_set_panels(
+    hass: HomeAssistant, service_call: ServiceCall
+) -> None:
     entry = _get_nanoleaf_config_entry(hass, service_call.data[ATTR_ENTITY_ID])
 
     api_client = _get_or_create_api_client(
@@ -416,7 +446,13 @@ async def _async_handle_set_panels(hass: HomeAssistant, service_call: ServiceCal
                     condition_result = Template(condition_value, hass).render()
                     normalized = str(condition_result).strip().lower()
                     use_animation = normalized not in (
-                        "false", "0", "", "none", "off", "unavailable", "unknown",
+                        "false",
+                        "0",
+                        "",
+                        "none",
+                        "off",
+                        "unavailable",
+                        "unknown",
                     )
             except Exception:  # noqa: BLE001
                 use_animation = False
@@ -470,7 +506,9 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
     return True
 
 
-async def _async_options_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
+async def _async_options_update_listener(
+    hass: HomeAssistant, entry: ConfigEntry
+) -> None:
     """Reload the config entry when options change."""
     await hass.config_entries.async_reload(entry.entry_id)
 
@@ -500,7 +538,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         return False
 
     remaining_entries = [
-        e for e in hass.config_entries.async_entries(DOMAIN) if e.entry_id != entry.entry_id
+        e
+        for e in hass.config_entries.async_entries(DOMAIN)
+        if e.entry_id != entry.entry_id
     ]
 
     # Remove service when the last config entry is removed and YAML is not used.
