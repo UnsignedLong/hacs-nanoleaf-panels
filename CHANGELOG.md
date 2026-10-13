@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.1.2
+
+- Fixed panel entities turned on in quick succession leaving only one panel lit. Each write replaces the whole display, and concurrent writes merged against the colors from before the burst, so the last one won
+- All writes to a device (panel entities and `set_panels`) now go through a single serialized writer. Calls that arrive within 50 ms of each other are merged into one device write
+- A panel turned on while the Nanoleaf is off no longer blanks panels lit moments earlier in the same burst. The writer tracks what it lit itself instead of relying only on the parent entity, whose state lags the write
+- For 5 seconds after a write, the integration trusts the colors it wrote over the device's read-back, which still reports the previous frame
+- Device polls no longer interleave with writes, and keep the write cache in step with the panel entities
+- Panel entities now update immediately after a `set_panels` call too
+- Turning off a panel right after lighting it from a dark device no longer gets skipped
+- Fixed panel entities failing to load ("Failed to fetch Nanoleaf panel layout:") after the Nanoleaf moved to a new IP address. The API client was cached with the old address and reused on every reload until Home Assistant restarted. It now follows the official Nanoleaf integration's entry, including its token, before every request
+- If the Nanoleaf can't be reached when panel entities are set up, Home Assistant now retries in the background (30 s, then up to every 3 minutes) instead of giving up until the next manual reload. This also covers a failed first poll, which previously couldn't be retried
+- Errors from the Nanoleaf now name the cause, e.g. `Request to Nanoleaf at 192.168.1.50 failed: Unavailable (ClientConnectorError: Cannot connect to host …)`. aionanoleaf2 raises its exceptions without a message, so these previously logged as an empty string
+
 ## 1.1.1
 
 - Isolated all aionanoleaf2 private `_request` calls into a single `NanoleafApiClient` adapter module — breakage from library updates is now confined to one place
