@@ -8,5 +8,5 @@
   "iot_class": "local_push",
   "issue_tracker": "https://github.com/UnsignedLong/hacs-nanoleaf-panels/issues",
   "loggers": ["aionanoleaf2"],
-  "version": "1.1.2"
+  "version": "1.1.3"
 }

@@ -27,10 +27,23 @@ jobs:
       - name: Hassfest
         uses: home-assistant/actions/hassfest@master
 
+  regressions:
+    name: Simulated-device regression tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run regression tests
+        run: python -m unittest discover -s tests -v
+
   release:
     name: Publish release
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [hacs, hassfest]
+    needs: [hacs, hassfest, regressions]
     runs-on: ubuntu-latest
     permissions:
       contents: write
