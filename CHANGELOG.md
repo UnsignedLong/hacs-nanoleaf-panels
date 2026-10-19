@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.2
+
+- Use the official Nanoleaf integration's library dependency instead of pinning a separate aionanoleaf2 version. This fixes the dependency conflict with Home Assistant Core 2026.10.2 that caused `AttributeError: 'Nanoleaf' object has no attribute 'supports_events'`.
+- Synchronize the manifest version with the release tag.
+
+After updating through HACS, restart Home Assistant to load the correct library version. No device re-pairing is required.
+
 ## 1.1.1
 
 - Isolated all aionanoleaf2 private `_request` calls into a single `NanoleafApiClient` adapter module — breakage from library updates is now confined to one place

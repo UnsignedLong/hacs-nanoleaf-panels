@@ -32,6 +32,8 @@ For fine-grained automation control, the service lets you set multiple panels in
 - Home Assistant with the official Nanoleaf integration configured
 - A Nanoleaf Shapes, Canvas, or Elements controller supported by the official integration
 
+The integration depends on Home Assistant's built-in `nanoleaf` integration and uses its `aionanoleaf2` library version. It does not install a separate, potentially conflicting version.
+
 ## Installation (HACS)
 
 [![Open your Home Assistant instance and add this repository in HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=UnsignedLong&repository=hacs-nanoleaf-panels&category=integration)
@@ -219,9 +221,9 @@ custom_components/
 
 ## Development and releases
 
-- Tag releases using semantic versioning, e.g. `v1.1.0`
-- Keep `custom_components/nanoleaf_panels/manifest.json` version in sync
-- Create GitHub releases from tags so HACS users can install pinned versions
+- Bump `custom_components/nanoleaf_panels/manifest.json` to the next stable semantic version and add matching `## X.Y.Z` notes to `CHANGELOG.md`.
+- Push the change to `main`. After HACS and Hassfest validation pass, the workflow creates a `vX.Y.Z` tag and publishes a stable GitHub release from the validated commit.
+- Existing releases are left unchanged. HACS users can update to the published release and then restart Home Assistant.
 
 ## Disclaimer
 
